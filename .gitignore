@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 .vscode/
 .pytest_cache/
+
+data/
+datasets/
+*.zip
