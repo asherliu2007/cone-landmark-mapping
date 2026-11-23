@@ -243,6 +243,49 @@ def plot_noisy_cones(actual_cones, noisy_cones):
 
     plt.show()
 
+def generate_curved_track(
+    radius=20.0,
+    track_width=6.0,
+    num_cones=32
+):
+    angles = np.linspace(
+        0, 2 * np.pi, num_cones,
+        endpoint=False
+    )
+
+    inner_radius = radius - track_width / 2
+    outer_radius = radius + track_width / 2
+
+    blue_cones = np.column_stack((
+        inner_radius * np.cos(angles),
+        inner_radius * np.sin(angles)
+    ))
+
+    yellow_cones = np.column_stack((
+        outer_radius * np.cos(angles),
+        outer_radius * np.sin(angles)
+    ))
+
+    return blue_cones, yellow_cones
+
+
+def simulate_curved_movement(
+    radius=20.0,
+    num_steps=180
+):
+    angles = np.linspace(
+        0, 2 * np.pi, num_steps,
+        endpoint=False
+    )
+
+    x = radius * np.cos(angles)
+    y = radius * np.sin(angles)
+
+    # Vehicle heading is tangent to the circle
+    heading = angles + np.pi / 2
+
+    return np.column_stack((x, y, heading))
+
 if __name__ == "__main__":
     blue_cones, yellow_cones = generate_cones()
 

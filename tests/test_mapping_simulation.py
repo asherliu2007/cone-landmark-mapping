@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
+from src.evaluation import evaluate_map
 from src.detection import ConeDetection
 from src.landmark_mapping import LandmarkMapper
 from src.simulation import (
@@ -43,8 +44,49 @@ def main():
 
     landmark_map = mapper.get_map()
 
+    estimated_positions = np.array([
+        landmark["position"]
+        for landmark in landmark_map.values()
+    ])
+    
+    # Exclude the two cones outside the sensor's
+    # field of view at the beginning of the simulation
+    
+    observable_cones = actual_cones[
+        actual_cones[:, 0] > 0
+    ]
+    
+    metrics = evaluate_map(
+        observable_cones,
+        estimated_positions
+    )
+    
+    print("\nMapping Evaluation")
+    print("------------------")
+    
+    for name, value in metrics.items():
+        print(f"{name}: {value:.4f}")
+        
+    print("------------------\n")
+
+
     print(f"Actual cones: {len(actual_cones)}")
-    print(f"Mapped landmarks: {len(landmark_map)}")
+    print(f"Confirmed landmarks: {len(mapper.get_map())}")
+
+    all_landmarks = mapper.get_map(confirmed_only=False)
+
+    print(f"Total landmarks: {len(all_landmarks)}")
+    print(f"Tentative landmarks: {len(all_landmarks) - len(landmark_map)}")
+
+    print("\nLandmark details:")
+
+    for landmark_id, landmark in all_landmarks.items():
+        print(
+            f"ID: {landmark_id}, "
+            f"Position: {np.round(landmark['position'], 3)}, "
+            f"Observations: {landmark['observations']}, "
+            f"Confirmed: {landmark['confirmed']}"
+        )
 
     plt.figure(figsize=(12, 6))
 
