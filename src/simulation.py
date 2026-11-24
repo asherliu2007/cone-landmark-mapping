@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-
+from src.detection import ConeDetection
 
 def generate_cones():
     # X positions along the track
@@ -285,6 +285,158 @@ def simulate_curved_movement(
     heading = angles + np.pi / 2
 
     return np.column_stack((x, y, heading))
+
+def generate_slalom_track(
+    length=80.0,
+    amplitude=5.0,
+    wavelength=40.0,
+    track_width=6.0,
+    cone_spacing=4.0
+):
+    x = np.arange(0, length + 0.001, cone_spacing)
+
+    k = 2 * np.pi / wavelength
+
+    y = amplitude * np.sin(k * x)
+
+    # Derivative of the centerline
+    dy_dx = amplitude * k * np.cos(k * x)
+
+    # Unit normal vectors perpendicular to the track
+    normals = np.column_stack((
+        -dy_dx,
+        np.ones_like(x)
+    ))
+
+    normals /= np.linalg.norm(
+        normals,
+        axis=1,
+        keepdims=True
+    )
+
+    centerline = np.column_stack((x, y))
+
+    blue_cones = (
+        centerline + normals * track_width / 2
+    )
+
+    yellow_cones = (
+        centerline - normals * track_width / 2
+    )
+
+    return blue_cones, yellow_cones
+
+def simulate_slalom_movement(
+    length=80.0,
+    amplitude=5.0,
+    wavelength=40.0,
+    step_size=1.0
+):
+    x = np.arange(0, length + 0.001, step_size)
+
+    k = 2 * np.pi / wavelength
+
+    y = amplitude * np.sin(k * x)
+
+    dy_dx = amplitude * k * np.cos(k * x)
+
+    headings = np.arctan2(
+        dy_dx,
+        np.ones_like(x)
+    )
+
+    return np.column_stack((x, y, headings))
+
+def generate_track(track_type="straight"):
+
+    if track_type == "straight":
+        blue_cones, yellow_cones = generate_cones()
+        vehicle_poses = simulate_vehicle_movement()
+
+    elif track_type == "curved":
+        blue_cones, yellow_cones = generate_curved_track()
+        vehicle_poses = simulate_curved_movement()
+
+    elif track_type == "slalom":
+        blue_cones, yellow_cones = generate_slalom_track()
+        vehicle_poses = simulate_slalom_movement()
+
+    else:
+        raise ValueError(
+            f"Unknown track type: {track_type}"
+        )
+
+    return blue_cones, yellow_cones, vehicle_poses
+
+def simulate_sensor_frame(
+    cones,
+    cone_classes,
+    vehicle_pose,
+    rng,
+    timestamp=0.0,
+    max_range=20.0,
+    fov_degrees=120,
+    noise_std=0.3
+):
+    x, y, heading = vehicle_pose
+
+    relative_positions = cones - np.array([x, y])
+
+    rotation = np.array([
+        [np.cos(heading), np.sin(heading)],
+        [-np.sin(heading), np.cos(heading)]
+    ])
+
+    local_positions = relative_positions @ rotation.T
+
+    distances = np.linalg.norm(
+        local_positions,
+        axis=1
+    )
+
+    angles = np.arctan2(
+        local_positions[:, 1],
+        local_positions[:, 0]
+    )
+
+    # Determine geometric visibility
+    visible = (
+        (distances <= max_range)
+        & (
+            np.abs(angles)
+            <= np.radians(fov_degrees / 2)
+        )
+    )
+
+    visible_indices = np.flatnonzero(visible)
+
+    detections = []
+
+    covariance = np.eye(2) * noise_std ** 2
+
+    for index in visible_indices:
+
+        noise = rng.normal(
+            0,
+            noise_std,
+            size=2
+        )
+
+        noisy_position = (
+            local_positions[index] + noise
+        )
+
+        detections.append(
+            ConeDetection(
+                position=noisy_position,
+                covariance=covariance.copy(),
+                source="simulated",
+                timestamp=timestamp,
+                cone_class=cone_classes[index]
+            )
+        )
+
+    return detections, visible_indices
 
 if __name__ == "__main__":
     blue_cones, yellow_cones = generate_cones()

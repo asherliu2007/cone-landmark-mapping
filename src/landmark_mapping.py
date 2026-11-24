@@ -4,7 +4,7 @@ from src.kalman_filter import KalmanFilter2D
 from src.data_association import associate_detections
 
 class LandmarkMapper:
-    def __init__(self, association_threshold=1.5, min_observations=2, max_tentative_age=5):
+    def __init__(self, association_threshold=5.991, min_observations=2, max_tentative_age=5):
         self.landmarks = {}
         self.next_id = 0
         self.association_threshold = association_threshold
@@ -23,20 +23,62 @@ class LandmarkMapper:
 
         return rotation @ np.asarray(local_position) + np.array([x, y])
 
-    def is_duplicate(self, position, cone_class=None, threshold=1.0):
-        for landmark in self.landmarks.values():
+    def is_duplicate(
+        self,
+        position,
+        covariance,
+        cone_class=None,
+        threshold=13.816,
+        max_distance=2.0,
+        existing_ids=None,
+        matched_ids=None
+    ):
+        if matched_ids is None:
+            matched_ids = set()
+
+        for landmark_id, landmark in self.landmarks.items():
+
+            # Only consider previously existing landmarks
             if (
-                cone_class is not None and
-                landmark["class"] is not None and
-                cone_class != landmark["class"]
+                existing_ids is not None
+                and landmark_id not in existing_ids
             ):
                 continue
-            
-            distance = np.linalg.norm(position - landmark["filter"].x)
-            
-            if distance < threshold:
+
+            # Do not suppress detections based on landmarks
+            # already assigned another detection this frame
+            if landmark_id in matched_ids:
+                continue
+
+            # Require compatible cone classes
+            if (
+                cone_class is not None
+                and landmark["class"] is not None
+                and cone_class != landmark["class"]
+            ):
+                continue
+
+            landmark_filter = landmark["filter"]
+
+            difference = position - landmark_filter.x
+
+            # Euclidean safety gate
+            distance = np.linalg.norm(difference)
+
+            if distance > max_distance:
+                continue
+
+            # Combined measurement uncertainty
+            S = landmark_filter.P + covariance
+
+            mahalanobis = (
+                difference.T
+                @ np.linalg.solve(S, difference)
+            )
+
+            if mahalanobis <= threshold:
                 return True
-            
+
         return False
 
     def update(self, detections, vehicle_pose):
@@ -68,6 +110,11 @@ class LandmarkMapper:
 
         # Existing landmark IDs
         landmark_ids = list(self.landmarks.keys())
+        existing_ids = set(landmark_ids)
+
+        # Predict all existing landmarks before association
+        for landmark in self.landmarks.values():
+            landmark["filter"].predict()
 
         # Build Mahalanobis distance cost matrix
         cost_matrix = np.full(
@@ -101,8 +148,17 @@ class LandmarkMapper:
 
         # Find globally optimal matches
         matches, unmatched_detections, _ = (
-            associate_detections(cost_matrix)
+            associate_detections(
+                cost_matrix,
+                threshold=self.association_threshold
+            )
         )
+
+        # Track landmarks already assigned a detection
+        matched_ids = {
+            landmark_ids[landmark_idx]
+            for _, landmark_idx in matches
+        }
 
         # Update matched landmarks
         for detection_idx, landmark_idx in matches:
@@ -117,7 +173,6 @@ class LandmarkMapper:
             if landmark["observations"] >= self.min_observations:
                 landmark["confirmed"] = True
             
-            landmark["filter"].predict()
             landmark["filter"].update(
                 detection["position"],
                 detection["covariance"]
@@ -131,8 +186,11 @@ class LandmarkMapper:
             detection = global_detections[detection_idx]
 
             if self.is_duplicate(
-                detection["position"],
-                detection["class"]
+                position=detection["position"],
+                covariance=detection["covariance"],
+                cone_class=detection["class"],
+                existing_ids=existing_ids,
+                matched_ids=matched_ids
             ):
                 continue
 
@@ -150,6 +208,101 @@ class LandmarkMapper:
             self.next_id += 1
             
         self.remove_stale_landmarks()
+        self.merge_duplicate_landmarks()
+
+    def merge_duplicate_landmarks(
+        self,
+        distance_threshold=0.35,
+        mahalanobis_threshold=5.991
+    ):
+        merged = True
+
+        while merged:
+
+            merged = False
+            landmark_ids = list(self.landmarks.keys())
+
+            for i in range(len(landmark_ids)):
+
+                if merged:
+                    break
+
+                id_a = landmark_ids[i]
+                landmark_a = self.landmarks[id_a]
+
+                for j in range(i + 1, len(landmark_ids)):
+
+                    id_b = landmark_ids[j]
+                    landmark_b = self.landmarks[id_b]
+
+                    # Only merge confirmed landmarks
+                    if not (
+                        landmark_a["confirmed"]
+                        and landmark_b["confirmed"]
+                    ):
+                        continue
+
+                    # Require matching cone classes
+                    if landmark_a["class"] != landmark_b["class"]:
+                        continue
+
+                    filter_a = landmark_a["filter"]
+                    filter_b = landmark_b["filter"]
+
+                    difference = filter_a.x - filter_b.x
+
+                    # Euclidean distance gate
+                    distance = np.linalg.norm(difference)
+
+                    if distance > distance_threshold:
+                        continue
+
+                    # Mahalanobis compatibility gate
+                    S = filter_a.P + filter_b.P
+
+                    mahalanobis = (
+                        difference.T
+                        @ np.linalg.solve(S, difference)
+                    )
+
+                    if mahalanobis > mahalanobis_threshold:
+                        continue
+
+                    # Covariance intersection
+                    weight = 0.5
+
+                    P_a_inv = np.linalg.inv(filter_a.P)
+                    P_b_inv = np.linalg.inv(filter_b.P)
+
+                    merged_covariance = np.linalg.inv(
+                        weight * P_a_inv
+                        + (1 - weight) * P_b_inv
+                    )
+
+                    merged_position = merged_covariance @ (
+                        weight * P_a_inv @ filter_a.x
+                        + (1 - weight) * P_b_inv @ filter_b.x
+                    )
+
+                    # Update the surviving landmark
+                    filter_a.x = merged_position
+                    filter_a.P = merged_covariance
+
+                    landmark_a["observations"] = max(
+                        landmark_a["observations"],
+                        landmark_b["observations"]
+                    )
+
+                    landmark_a["last_seen"] = max(
+                        landmark_a["last_seen"],
+                        landmark_b["last_seen"]
+                    )
+
+                    # Remove the duplicate landmark
+                    del self.landmarks[id_b]
+
+                    merged = True
+                    break
 
     def remove_stale_landmarks(self):
         stale_ids = []

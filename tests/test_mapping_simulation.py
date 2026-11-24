@@ -18,7 +18,7 @@ def main():
     actual_cones = np.vstack((blue_cones, yellow_cones))
 
     vehicle_poses = simulate_vehicle_movement()
-    mapper = LandmarkMapper(association_threshold=1.5)
+    mapper = LandmarkMapper(association_threshold=5.991, min_observations=2)
 
     for step, pose in enumerate(vehicle_poses):
         noisy_positions = simulate_cone_detections(

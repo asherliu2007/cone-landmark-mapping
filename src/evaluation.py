@@ -7,7 +7,9 @@ from src.data_association import associate_detections
 def evaluate_map(
     actual_positions,
     estimated_positions,
-    matching_threshold=1.0
+    matching_threshold=1.0,
+    actual_classes=None,
+    estimated_classes=None
 ):
     actual_positions = np.asarray(
         actual_positions, dtype=float
@@ -22,6 +24,13 @@ def evaluate_map(
         estimated_positions,
         actual_positions
     )
+    
+    # Prevent matching cones of different classes
+    if actual_classes is not None and estimated_classes is not None:
+        for i, estimated_class in enumerate(estimated_classes):
+            for j, actual_class in enumerate(actual_classes):
+                if estimated_class != actual_class:
+                    distances[i, j] = np.inf
 
     # Match estimated landmarks to actual cones
     matches, unmatched_estimates, unmatched_actual = (
